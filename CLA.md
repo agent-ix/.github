@@ -105,13 +105,20 @@ become aware that would make these representations inaccurate in any respect.
 
 ---
 
-**By signing below — or by the electronic signature recorded against a pull
-request by the project's CLA assistant — You accept and agree to the terms of
-this Agreement for Your present and future Contributions.**
+## 8. Signature
+
+You accept and agree to the terms of this Agreement for Your present and future
+Contributions by signing below, or by recording an electronic signature against a
+pull request in the form the project's CLA assistant requests.
+
+**An electronic signature must state Your legal name.** A signature identifying
+You only by account handle is not sufficient. By signing You confirm that You are
+the individual named, that You are signing on Your own behalf, and that the
+representations in Section 5 are accurate.
 
 | | |
 |---|---|
-| Full name | |
+| Legal name | |
 | GitHub username | |
 | Email | |
 | Date | |
