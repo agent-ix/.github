@@ -29,6 +29,20 @@ name: CLA Assistant Lite (reusable)
 # ever hands the vendor action a `custom-pr-sign-comment` that already passed
 # that check, so a bare "I hereby sign the CLA" with no name is never recorded
 # as a signature.
+#
+# Agent-authored commits (`Agent IX <agent@agent-ix.dev>`) are not linked to
+# any GitHub account, so GitHub's PR-commits API reports `author: null` for
+# them and the vendor action has no login to test against its allowlist --
+# they can never be "signed" no matter what. The `internal` step below
+# exempts a PR from CLA enforcement entirely, but only when BOTH (a) every
+# commit is either from an allowlisted login or an unresolvable author whose
+# raw commit email is a known internal address, AND (b) the PR itself was
+# opened by an allowlisted login. Condition (b) is load-bearing: an
+# unresolvable `author: null` commit is trivially forgeable by anyone (git
+# author fields aren't verified), so email-matching alone would let an
+# outside contributor claim `agent@agent-ix.dev` and skip the CLA. Requiring
+# the PR opener to already be allowlisted means only an already-trusted
+# identity can open a PR that benefits from the exemption.
 
 on:
   workflow_call: {}
@@ -49,13 +63,64 @@ env:
   NO_NEW_SIGNATURE_SENTINEL: __agent-ix-cla-recheck-only__
   CLA_DOCUMENT_URL: https://github.com/agent-ix/.github/blob/main/CLA.md
   SIGNATURES_BRANCH: cla-signatures
+  # Logins exempt from signing (mirrors the vendor action's own allowlist
+  # input below -- kept in one place here so the internal-PR check and the
+  # vendor action agree).
+  ALLOWLISTED_LOGINS: kreneskyp,agent-ix-bot,agent-ix[bot],dependabot[bot],github-actions[bot]
+  # Raw commit-author emails treated as internal when GitHub can't resolve
+  # them to a login at all (author: null). See the org's own commit history:
+  # every commit reachable from --all in the publication candidates is one
+  # of these two identities.
+  INTERNAL_UNRESOLVABLE_EMAILS: agent@agent-ix.dev,kreneskyp@gmail.com
 
 jobs:
   gate:
     runs-on: ubuntu-latest
     outputs:
       sign-phrase: ${{ steps.match.outputs.sign-phrase }}
+      skip-cla: ${{ steps.internal.outputs.skip-cla }}
     steps:
+      - name: Exempt wholly-internal PRs from CLA enforcement
+        id: internal
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ALLOWLISTED_LOGINS: ${{ env.ALLOWLISTED_LOGINS }}
+          INTERNAL_UNRESOLVABLE_EMAILS: ${{ env.INTERNAL_UNRESOLVABLE_EMAILS }}
+        with:
+          script: |
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const pull_number = context.issue.number
+            const allowlisted = new Set(
+              process.env.ALLOWLISTED_LOGINS.split(',').map(s => s.trim())
+            )
+            const internalEmails = new Set(
+              process.env.INTERNAL_UNRESOLVABLE_EMAILS.split(',').map(s => s.trim())
+            )
+
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number })
+            const openerLogin = pr.data.user?.login
+            // Load-bearing: only an already-trusted PR opener gets the
+            // benefit of the doubt for unresolvable commit authors below.
+            if (!openerLogin || !allowlisted.has(openerLogin)) {
+              core.setOutput('skip-cla', 'false')
+              return
+            }
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner, repo, pull_number
+            })
+            const allInternal = commits.every(c => {
+              const login = c.author?.login
+              if (login && allowlisted.has(login)) return true
+              if (!c.author) {
+                const email = c.commit?.author?.email
+                if (email && internalEmails.has(email)) return true
+              }
+              return false
+            })
+            core.setOutput('skip-cla', allInternal ? 'true' : 'false')
+
       - name: Ensure signatures branch exists
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -157,8 +222,17 @@ jobs:
               sha
             })
 
+  cla-check-internal:
+    needs: gate
+    if: needs.gate.outputs.skip-cla == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Every commit on this PR is from an allowlisted login or an unresolvable internal author (e.g. Agent IX <agent@agent-ix.dev>), and the PR was opened by an allowlisted login. Not an outside contribution; CLA not required."
+
   cla-check:
     needs: gate
+    if: needs.gate.outputs.skip-cla != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: CLA Assistant Lite
@@ -169,7 +243,7 @@ jobs:
           path-to-signatures: signatures/version1/cla.json
           path-to-document: https://github.com/agent-ix/.github/blob/main/CLA.md
           branch: ${{ env.SIGNATURES_BRANCH }}
-          allowlist: kreneskyp,agent-ix-bot,agent-ix[bot],dependabot[bot],github-actions[bot]
+          allowlist: ${{ env.ALLOWLISTED_LOGINS }}
           custom-pr-sign-comment: ${{ needs.gate.outputs.sign-phrase }}
           custom-notsigned-prcomment: >-
             Thanks for the contribution. Before this can be merged, please read the
