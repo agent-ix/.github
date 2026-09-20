@@ -11,6 +11,15 @@ name: CLA Assistant Lite (reusable)
 # scripts/gather-signatures.sh in this repo for a consolidated export across
 # every repo when one is needed (e.g. for diligence).
 #
+# Signatures live on a dedicated `cla-signatures` branch in the calling repo,
+# NOT on its default branch. Every repo in this org protects its default
+# branch with required PR review, and GITHUB_TOKEN cannot push straight to a
+# protected branch outside a reviewed PR merge -- confirmed by an actual
+# failed run during PLAT-862 verification ("Changes must be made through a
+# pull request"). The `ensure signatures branch exists` step below creates
+# that unprotected branch on first use, off whatever the default branch's
+# HEAD is at the time.
+#
 # Why this isn't just "call the vendor action directly": contributor-assistant/
 # github-action's own sign-phrase matching is either (a) an exact string match
 # against a fixed `custom-pr-sign-comment`, which can't include a variable
@@ -39,6 +48,7 @@ env:
   # new comment to validate) and for `recheck`.
   NO_NEW_SIGNATURE_SENTINEL: __agent-ix-cla-recheck-only__
   CLA_DOCUMENT_URL: https://github.com/agent-ix/.github/blob/main/CLA.md
+  SIGNATURES_BRANCH: cla-signatures
 
 jobs:
   gate:
@@ -46,6 +56,27 @@ jobs:
     outputs:
       sign-phrase: ${{ steps.match.outputs.sign-phrase }}
     steps:
+      - name: Ensure signatures branch exists
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          SIGNATURES_BRANCH: ${{ env.SIGNATURES_BRANCH }}
+        with:
+          script: |
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const branch = process.env.SIGNATURES_BRANCH
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` })
+              return // already exists
+            } catch (err) {
+              if (err.status !== 404) throw err
+            }
+            const defaultBranch = (await github.rest.repos.get({ owner, repo })).data.default_branch
+            const head = await github.rest.git.getRef({ owner, repo, ref: `heads/${defaultBranch}` })
+            await github.rest.git.createRef({
+              owner, repo, ref: `refs/heads/${branch}`, sha: head.data.object.sha
+            })
+
       - name: Validate signing comment carries a legal name
         id: match
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -80,13 +111,16 @@ jobs:
         env:
           LEGAL_NAME: ${{ steps.match.outputs.legal-name }}
           CLA_DOCUMENT_URL: ${{ env.CLA_DOCUMENT_URL }}
+          SIGNATURES_BRANCH: ${{ env.SIGNATURES_BRANCH }}
         with:
           script: |
             // Audit record is written into THIS repo (the one the PR was
-            // opened against), using the run's own automatic GITHUB_TOKEN.
+            // opened against) on its dedicated, unprotected cla-signatures
+            // branch, using the run's own automatic GITHUB_TOKEN.
             const path = 'signatures/version1/legal-names.json'
             const owner = context.repo.owner
             const repo = context.repo.repo
+            const branch = process.env.SIGNATURES_BRANCH
 
             // Pin "which text version" to the actual blob SHA of the
             // canonical CLA.md at the moment of signing. This is a public
@@ -98,7 +132,7 @@ jobs:
             let sha
             let records = []
             try {
-              const existing = await github.rest.repos.getContent({ owner, repo, path })
+              const existing = await github.rest.repos.getContent({ owner, repo, path, ref: branch })
               sha = existing.data.sha
               records = JSON.parse(Buffer.from(existing.data.content, 'base64').toString('utf8'))
             } catch (err) {
@@ -117,7 +151,7 @@ jobs:
             })
 
             await github.rest.repos.createOrUpdateFileContents({
-              owner, repo, path,
+              owner, repo, path, branch,
               message: `Record CLA signature: ${context.payload.comment.user.login} in ${owner}/${repo}#${context.issue.number}`,
               content: Buffer.from(JSON.stringify(records, null, 2) + '\n').toString('base64'),
               sha
@@ -134,7 +168,7 @@ jobs:
         with:
           path-to-signatures: signatures/version1/cla.json
           path-to-document: https://github.com/agent-ix/.github/blob/main/CLA.md
-          branch: ${{ github.event.repository.default_branch }}
+          branch: ${{ env.SIGNATURES_BRANCH }}
           allowlist: kreneskyp,agent-ix-bot,agent-ix[bot],dependabot[bot],github-actions[bot]
           custom-pr-sign-comment: ${{ needs.gate.outputs.sign-phrase }}
           custom-notsigned-prcomment: >-
