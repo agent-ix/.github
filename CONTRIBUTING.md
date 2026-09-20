@@ -4,21 +4,12 @@ Thanks for your interest in contributing to Agent IX projects.
 
 ## Before you open a pull request: sign the CLA
 
-Every contribution needs a signed **Contributor License Agreement (CLA)**
-before it can be merged — read it first, at [`CLA.md`](CLA.md) in this repo.
-It's a standard individual CLA (adapted from the Apache Software Foundation's),
-not a copyright assignment: you keep ownership of your work and grant a
-license back to the project, including the right to sublicense, which is what
-lets these projects offer both an open-source (AGPL) license and a commercial
-one.
+Every contribution requires a signed Contributor License Agreement. Read it
+at [`CLA.md`](CLA.md) in this repo before you start writing code.
 
 When you open your first pull request, the CLA Assistant bot will comment
-with a link to sign electronically. Nothing further to do — sign once and
-it's recorded against your GitHub account for future contributions across the
-org.
-
-If you have questions about the agreement itself, ask in the PR or open an
-issue before you start writing code.
+with a link to sign electronically. Sign once and it's recorded against your
+GitHub account for future contributions across the org.
 
 ## Making a change
 
