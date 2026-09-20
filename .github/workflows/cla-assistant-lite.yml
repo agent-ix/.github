@@ -1,0 +1,150 @@
+name: CLA Assistant Lite (reusable)
+
+# Called by a short per-repo workflow (see agent-ix/agent-skills new-project
+# scaffolding and rust-lib-cookiecutter for the caller template). Keeping the
+# logic here means one edit fixes CLA enforcement everywhere it's wired up.
+#
+# Why this isn't just "call the vendor action directly": contributor-assistant/
+# github-action's own sign-phrase matching is either (a) an exact string match
+# against a fixed `custom-pr-sign-comment`, which can't include a variable
+# legal name, or (b) a loose default regex that matches ANY comment containing
+# the base phrase as a substring, which would accept a signature with no name
+# at all. The `gate` job below does the actual legal-name validation and only
+# ever hands the vendor action a `custom-pr-sign-comment` that already passed
+# that check, so a bare "I hereby sign the CLA" with no name is never recorded
+# as a signature.
+
+on:
+  workflow_call:
+    secrets:
+      SIGNATURE_STORE_TOKEN:
+        description: >-
+          Token with contents:write on agent-ix/.github. Used both to store
+          the vendor action's signature file there (remote-organization-name /
+          remote-repository-name) and to append the legal-name audit record.
+        required: true
+
+permissions:
+  actions: write
+  pull-requests: write
+  statuses: write
+  contents: read
+
+env:
+  # Sentinel that can never appear as a real signing comment. Handing this to
+  # the vendor action as custom-pr-sign-comment means "don't accept any
+  # comment as a new signature this run, just reconcile against the
+  # already-recorded signature file." Used for pull_request_target runs (no
+  # new comment to validate) and for `recheck`.
+  NO_NEW_SIGNATURE_SENTINEL: __agent-ix-cla-recheck-only__
+  CLA_DOCUMENT_URL: https://github.com/agent-ix/.github/blob/main/CLA.md
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      sign-phrase: ${{ steps.match.outputs.sign-phrase }}
+    steps:
+      - name: Validate signing comment carries a legal name
+        id: match
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const SENTINEL = process.env.NO_NEW_SIGNATURE_SENTINEL
+            if (context.eventName !== 'issue_comment') {
+              core.setOutput('sign-phrase', SENTINEL)
+              return
+            }
+            const body = (context.payload.comment.body || '').trim()
+            if (body.toLowerCase() === 'recheck') {
+              core.setOutput('sign-phrase', SENTINEL)
+              return
+            }
+            // Required, exact shape: the fixed CLA sign phrase followed by a
+            // mandatory, non-empty legal name. Anything else (missing name,
+            // reworded phrase, name-only reply) does not count as a
+            // signature and is never forwarded to the vendor action.
+            const re = /^i have read the cla document and i hereby sign the cla\.\s*my legal name is:\s*(.+\S)\s*$/i
+            const m = body.match(re)
+            if (!m) {
+              core.setOutput('sign-phrase', SENTINEL)
+              return
+            }
+            core.setOutput('sign-phrase', body)
+            core.setOutput('legal-name', m[1].trim())
+
+      - name: Record legal name in the audit trail
+        if: steps.match.outputs.legal-name != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          LEGAL_NAME: ${{ steps.match.outputs.legal-name }}
+          CLA_DOCUMENT_URL: ${{ env.CLA_DOCUMENT_URL }}
+        with:
+          github-token: ${{ secrets.SIGNATURE_STORE_TOKEN }}
+          script: |
+            const path = 'signatures/version1/legal-names.json'
+            const owner = 'agent-ix'
+            const repo = '.github'
+
+            // Pin "which text version" to the actual blob SHA of CLA.md at
+            // the moment of signing, not just a floating branch URL.
+            const claFile = await github.rest.repos.getContent({
+              owner, repo, path: 'CLA.md', ref: 'main'
+            })
+
+            let sha
+            let records = []
+            try {
+              const existing = await github.rest.repos.getContent({ owner, repo, path })
+              sha = existing.data.sha
+              records = JSON.parse(Buffer.from(existing.data.content, 'base64').toString('utf8'))
+            } catch (err) {
+              if (err.status !== 404) throw err
+            }
+
+            records.push({
+              githubLogin: context.payload.comment.user.login,
+              legalName: process.env.LEGAL_NAME,
+              repo: `${context.repo.owner}/${context.repo.repo}`,
+              pullRequest: context.issue.number,
+              commentId: context.payload.comment.id,
+              claDocumentUrl: process.env.CLA_DOCUMENT_URL,
+              claDocumentSha: claFile.data.sha,
+              signedAt: context.payload.comment.created_at
+            })
+
+            await github.rest.repos.createOrUpdateFileContents({
+              owner, repo, path,
+              message: `Record CLA signature: ${context.payload.comment.user.login} in ${context.repo.owner}/${context.repo.repo}#${context.issue.number}`,
+              content: Buffer.from(JSON.stringify(records, null, 2) + '\n').toString('base64'),
+              sha
+            })
+
+  cla-check:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant Lite
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.SIGNATURE_STORE_TOKEN }}
+        with:
+          path-to-signatures: signatures/version1/cla.json
+          path-to-document: https://github.com/agent-ix/.github/blob/main/CLA.md
+          branch: main
+          remote-organization-name: agent-ix
+          remote-repository-name: .github
+          allowlist: kreneskyp,agent-ix-bot,agent-ix[bot],dependabot[bot],github-actions[bot]
+          custom-pr-sign-comment: ${{ needs.gate.outputs.sign-phrase }}
+          custom-notsigned-prcomment: >-
+            Thanks for the contribution. Before this can be merged, please read the
+            [Agent IX CLA](https://github.com/agent-ix/.github/blob/main/CLA.md) and sign
+            it by replying with this exact comment, with your real legal name in place of
+            the bracketed text:
+
+
+            I have read the CLA Document and I hereby sign the CLA. My legal name is: [Your Legal Name]
+          custom-allsigned-prcomment: All contributors have signed the Agent IX CLA.
+          lock-pullrequest-aftermerge: true
+          suggest-recheck: true
