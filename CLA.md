@@ -1,8 +1,5 @@
 # Agent IX Individual Contributor License Agreement
 
-*Adapted from the Apache Software Foundation Individual Contributor License
-Agreement v2.0. Not legal advice; review by counsel before relying on it.*
-
 Thank you for your interest in software projects maintained by **Peter Krenesky**
 ("the Maintainer"). This agreement documents the rights granted by contributors.
 It is for your protection as a Contributor as well as the protection of the
