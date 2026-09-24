@@ -33,11 +33,12 @@ name: CLA Assistant Lite (reusable)
 # Agent-authored commits (`Agent IX <agent@agent-ix.dev>`) are not linked to
 # any GitHub account, so GitHub's PR-commits API reports `author: null` for
 # them and the vendor action has no login to test against its allowlist --
-# they can never be "signed" no matter what. The `internal` step below
-# exempts a PR from CLA enforcement entirely, but only when BOTH (a) every
-# commit is either from an allowlisted login or an unresolvable author whose
-# raw commit email is a known internal address, AND (b) the PR itself was
-# opened by an allowlisted login. Condition (b) is load-bearing: an
+# they can never be "signed" no matter what. Codex-authored commits resolve
+# to GitHub login `codex`, which likewise cannot sign on behalf of the human
+# directing the contribution. The `internal` step below exempts a PR from CLA
+# enforcement only when every commit has an approved internal identity and
+# the PR itself was opened by an allowlisted login. Codex commits additionally
+# require a named human sponsor. The opener condition is load-bearing: an
 # unresolvable `author: null` commit is trivially forgeable by anyone (git
 # author fields aren't verified), so email-matching alone would let an
 # outside contributor claim `agent@agent-ix.dev` and skip the CLA. Requiring
@@ -72,6 +73,10 @@ env:
   # every commit reachable from --all in the publication candidates is one
   # of these two identities.
   INTERNAL_UNRESOLVABLE_EMAILS: agent@agent-ix.dev,kreneskyp@gmail.com
+  # Only these human PR openers may sponsor the exact Codex commit identity.
+  # Do not add `codex` to ALLOWLISTED_LOGINS: that vendor allowlist applies
+  # even to PRs opened by outside contributors.
+  INTERNAL_CODEX_SPONSORS: kreneskyp
 
 jobs:
   gate:
@@ -86,6 +91,7 @@ jobs:
         env:
           ALLOWLISTED_LOGINS: ${{ env.ALLOWLISTED_LOGINS }}
           INTERNAL_UNRESOLVABLE_EMAILS: ${{ env.INTERNAL_UNRESOLVABLE_EMAILS }}
+          INTERNAL_CODEX_SPONSORS: ${{ env.INTERNAL_CODEX_SPONSORS }}
         with:
           script: |
             const owner = context.repo.owner
@@ -97,11 +103,14 @@ jobs:
             const internalEmails = new Set(
               process.env.INTERNAL_UNRESOLVABLE_EMAILS.split(',').map(s => s.trim())
             )
+            const codexSponsors = new Set(
+              process.env.INTERNAL_CODEX_SPONSORS.split(',').map(s => s.trim())
+            )
 
             const pr = await github.rest.pulls.get({ owner, repo, pull_number })
             const openerLogin = pr.data.user?.login
             // Load-bearing: only an already-trusted PR opener gets the
-            // benefit of the doubt for unresolvable commit authors below.
+            // benefit of the doubt for internal agent commit authors below.
             if (!openerLogin || !allowlisted.has(openerLogin)) {
               core.setOutput('skip-cla', 'false')
               return
@@ -113,6 +122,9 @@ jobs:
             const allInternal = commits.every(c => {
               const login = c.author?.login
               if (login && allowlisted.has(login)) return true
+              if (login === 'codex' && codexSponsors.has(openerLogin) &&
+                  c.commit?.author?.name === 'Codex' &&
+                  c.commit?.author?.email === 'codex@openai.com') return true
               if (!c.author) {
                 const email = c.commit?.author?.email
                 if (email && internalEmails.has(email)) return true
