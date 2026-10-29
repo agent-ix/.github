@@ -71,7 +71,7 @@ env:
   # them to a login at all (author: null). See the org's own commit history:
   # every commit reachable from --all in the publication candidates is one
   # of these two identities.
-  INTERNAL_UNRESOLVABLE_EMAILS: agent@agent-ix.dev,kreneskyp@gmail.com
+  INTERNAL_UNRESOLVABLE_EMAILS: agent@agent-ix.dev,kreneskyp@gmail.com,peter@agent-ix.ai
 
 jobs:
   gate:
